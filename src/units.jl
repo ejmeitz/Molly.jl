@@ -16,9 +16,11 @@ ustrip_vec(x...) = ustrip.(x...)
 # Parses the length, mass, velocity, energy and force units and verifies they are
 #   correct and consistent with other parameters passed to the system.
 function check_units(atoms, coords, velocities, energy_units, force_units,
-                     p_inters, s_inters, g_inters, boundary)
+                     p_inters, t_inters, s_inters, g_inters, boundary)
     masses = mass.(atoms)
     sys_units = check_system_units(masses, coords, velocities, energy_units, force_units)
+
+    check_interaction_units(p_inters, t_inters, s_inters, g_inters, sys_units)
     check_other_units(atoms, boundary, sys_units)
     return sys_units
 end
@@ -58,6 +60,25 @@ function check_system_units(masses, coords, velocities, energy_units, force_unit
 
     return NamedTuple{(:length, :velocity, :mass, :energy, :force)}((length_units,
         vel_units, mass_units, energy_units, force_units))
+end
+
+function check_interaction_units(p_inters, t_inters, s_inters, g_inters, sys_units::NamedTuple)
+    for inter_tuple in [p_inters, t_inters, s_inters, g_inters]
+        for inter in inter_tuple
+            if hasproperty(inter, :energy_units)
+                if inter.energy_units != sys_units[:energy]
+                    throw(ArgumentError("energy units passed to system do not match those passed in an interaction"))
+                end
+            end
+
+            if hasproperty(inter, :force_units)
+                if inter.force_units != sys_units[:force]
+                    throw(ArgumentError("force units passed to system do not match those passed in an interaction"))
+                end
+            end
+        end
+    end
+
 end
 
 function check_other_units(atoms_dev, boundary, sys_units::NamedTuple)

@@ -24,6 +24,40 @@ export
 
 const DefaultFloat = Float64
 
+abstract type NBodyInteraction{N} end
+
+"""
+A pairwise interaction that will apply to all or most atom pairs.
+
+Custom pairwise interactions should sub-type this abstract type.
+"""
+abstract type PairwiseInteraction <: NBodyInteraction{2} end
+
+"""
+A pairwise interaction that will apply to all or most atom pairs.
+
+Custom pairwise interactions should sub-type this abstract type.
+"""
+abstract type ThreeBodyInteraction <: NBodyInteraction{3} end
+
+"""
+    use_neighbors(inter)
+
+Whether a N-body interaction uses the neighbor list, default `false`.
+
+Custom N-body  interactions can define a method for this function.
+For built-in interactions such as [`LennardJones`](@ref) this function accesses
+the `use_neighbors` field of the struct.
+"""
+use_neighbors(::NBodyInteraction) = false
+
+"""
+A specific interaction between sets of specific atoms, e.g. a bond angle.
+
+Custom specific interactions should sub-type this abstract type.
+"""
+abstract type SpecificInteraction end
+
 """
     InteractionList1Atoms(is, inters)
     InteractionList1Atoms(is, inters, types)
@@ -468,9 +502,9 @@ interface described there.
     be bits types and hence work on the GPU.
 - `topology::TO=nothing`: topological information about the system such as which
     atoms are in the same molecule.
-- `pairwise_inters::PI=()`: the pairwise interactions in the system, i.e.
+- `nbody_inters=()`: the n-body interactions in the system, i.e.
     interactions between all or most atom pairs such as electrostatics.
-    Typically a `Tuple`.
+    Typically a `Tuple`. Will be parsed into `pairwise_inters` and `three_body_inters`.
 - `specific_inter_lists::SI=()`: the specific interactions in the system,
     i.e. interactions between specific atoms such as bonds or angles. Typically
     a `Tuple`.
@@ -491,7 +525,7 @@ interface described there.
     modified in some simulations. `k` is chosen based on the `energy_units` given.
 - `data::DA=nothing`: arbitrary data associated with the system.
 """
-mutable struct System{D, G, T, A, C, B, V, AD, TO, PI, SI, GI, CN, NF,
+mutable struct System{D, G, T, A, C, B, V, AD, TO, PI, TI, SI, GI, CN, NF,
                       L, F, E, K, M, DA} <: AtomsBase.AbstractSystem{D}
     atoms::A
     coords::C
@@ -500,6 +534,7 @@ mutable struct System{D, G, T, A, C, B, V, AD, TO, PI, SI, GI, CN, NF,
     atoms_data::AD
     topology::TO
     pairwise_inters::PI
+    three_body_inters::TI
     specific_inter_lists::SI
     general_inters::GI
     constraints::CN
@@ -520,7 +555,7 @@ function System(;
                 velocities=nothing,
                 atoms_data=[],
                 topology=nothing,
-                pairwise_inters=(),
+                nbody_inters=(),
                 specific_inter_lists=(),
                 general_inters=(),
                 constraints=(),
@@ -538,7 +573,6 @@ function System(;
     B = typeof(boundary)
     AD = typeof(atoms_data)
     TO = typeof(topology)
-    PI = typeof(pairwise_inters)
     SI = typeof(specific_inter_lists)
     GI = typeof(general_inters)
     CN = typeof(constraints)
@@ -547,6 +581,13 @@ function System(;
     F = typeof(force_units)
     E = typeof(energy_units)
     DA = typeof(data)
+
+
+    # Parse pair and three body inters
+    pairwise_inters = tuple(filter(inter -> inter isa PairwiseInteraction, nbody_inters)...)
+    three_body_inters = tuple(filter(inter -> inter isa ThreeBodyInteraction, nbody_inters)...)
+    PI = typeof(pairwise_inters)
+    TI = typeof(three_body_inters)
 
     if isnothing(velocities)
         if force_units == NoUnits
@@ -604,10 +645,10 @@ function System(;
     end
 
     check_units(atoms, coords, vels, energy_units, force_units, pairwise_inters,
-                specific_inter_lists, general_inters, boundary)
+                three_body_inters, specific_inter_lists, general_inters, boundary)
 
-    return System{D, G, T, A, C, B, V, AD, TO, PI, SI, GI, CN, NF, L, F, E, K, M, DA}(
-                    atoms, coords, boundary, vels, atoms_data, topology, pairwise_inters,
+    return System{D, G, T, A, C, B, V, AD, TO, PI, TI, SI, GI, CN, NF, L, F, E, K, M, DA}(
+                    atoms, coords, boundary, vels, atoms_data, topology, pairwise_inters, three_body_inters,
                     specific_inter_lists, general_inters, constraints, neighbor_finder, loggers,
                     df, force_units, energy_units, k_converted, atom_masses, data)
 end
@@ -627,6 +668,7 @@ function System(sys::System;
                 atoms_data=sys.atoms_data,
                 topology=sys.topology,
                 pairwise_inters=sys.pairwise_inters,
+                three_body_inters = sys.three_body_inters,
                 specific_inter_lists=sys.specific_inter_lists,
                 general_inters=sys.general_inters,
                 constraints=sys.constraints,
@@ -644,6 +686,7 @@ function System(sys::System;
         atoms_data=atoms_data,
         topology=topology,
         pairwise_inters=pairwise_inters,
+        three_body_inters=three_body_inters,
         specific_inter_lists=specific_inter_lists,
         general_inters=general_inters,
         constraints=constraints,
@@ -671,7 +714,7 @@ the convenience constructor `System(sys; <keyword arguments>)`.
 function System(crystal::Crystal{D};
                 velocities=nothing,
                 topology=nothing,
-                pairwise_inters=(),
+                nbody_inters=(),
                 specific_inter_lists=(),
                 general_inters=(),
                 constraints=(),
@@ -709,7 +752,7 @@ function System(crystal::Crystal{D};
         velocities=velocities,
         atoms_data=atoms_data,
         topology=topology,
-        pairwise_inters=pairwise_inters,
+        nbody_inters=nbody_inters,
         specific_inter_lists=specific_inter_lists,
         general_inters=general_inters,
         constraints=constraints,
@@ -820,11 +863,11 @@ construction where `n` is the number of threads to be used per replica.
     This is only used if no value is passed to the argument `replica_topology`.
 - `replica_topology=[nothing for _ in 1:n_replicas]`: the topological information for
     each replica.
-- `pairwise_inters=()`: the pairwise interactions in the system, i.e. interactions
+- `nbody_inters=()`: the nbody interactions in the system, i.e. interactions
     between all or most atom pairs such as electrostatics (to be used if the same for all replicas).
     Typically a `Tuple`. This is only used if no value is passed to the argument
-    `replica_pairwise_inters`.
-- `replica_pairwise_inters=[() for _ in 1:n_replicas]`: the pairwise interactions for
+    `replica_nbody_inters`.
+- `replica_nbody_inters=[() for _ in 1:n_replicas]`: the nbody interactions for
     each replica.
 - `specific_inter_lists=()`: the specific interactions in the system, i.e. interactions
     between specific atoms such as bonds or angles (to be used if the same for all replicas).
@@ -878,8 +921,8 @@ function ReplicaSystem(;
                         atoms_data=[],
                         topology=nothing,
                         replica_topology=nothing,
-                        pairwise_inters=(),
-                        replica_pairwise_inters=nothing,
+                        nbody_inters=(),
+                        replica_nbody_inters=nothing,
                         specific_inter_lists=(),
                         replica_specific_inter_lists=nothing,
                         general_inters=(),
@@ -922,10 +965,10 @@ function ReplicaSystem(;
     end
     TO = eltype(replica_topology)
 
-    if isnothing(replica_pairwise_inters)
-        replica_pairwise_inters = [pairwise_inters for _ in 1:n_replicas]
-    elseif length(replica_pairwise_inters) != n_replicas
-        throw(ArgumentError("number of pairwise interactions ($(length(replica_pairwise_inters)))"
+    if isnothing(replica_nbody_inters)
+        replica_nbody_inters = [nbody_inters for _ in 1:n_replicas]
+    elseif length(replica_nbody_inters) != n_replicas
+        throw(ArgumentError("number of nbody interactions ($(length(replica_nbody_inters)))"
                             * "does not match number of replicas ($n_replicas)"))
     end
 
@@ -1033,6 +1076,7 @@ function ReplicaSystem(;
     k_converted = convert_k_units(T, k, energy_units)
     K = typeof(k_converted)
 
+    #TODO FIGURE OUT HOW TO CONSTRUCT THIS WITH THREE BODY
     replicas = Tuple(System{D, G, T, A, C, B, V, AD, TO, typeof(replica_pairwise_inters[i]),
                         typeof(replica_specific_inter_lists[i]), typeof(replica_general_inters[i]),
                         typeof(replica_constraints[i]), NF, typeof(replica_loggers[i]), F, E, K,

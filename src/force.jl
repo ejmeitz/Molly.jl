@@ -148,6 +148,10 @@ function forces_nounits!(fs_nounits, sys::System{D, false}, neighbors, fs_chunks
                          step_n::Integer=0; n_threads::Integer=Threads.nthreads()) where D
     pairwise_inters_nonl = filter(!use_neighbors, values(sys.pairwise_inters))
     pairwise_inters_nl   = filter( use_neighbors, values(sys.pairwise_inters))
+
+    threebody_inters_nonl = filter(!use_neighbors, values(sys.threebody_inters))
+    threebody_inters_nl   = filter( use_neighbors, values(sys.threebody_inters))
+
     sils_1_atoms = filter(il -> il isa InteractionList1Atoms, values(sys.specific_inter_lists))
     sils_2_atoms = filter(il -> il isa InteractionList2Atoms, values(sys.specific_inter_lists))
     sils_3_atoms = filter(il -> il isa InteractionList3Atoms, values(sys.specific_inter_lists))
@@ -167,10 +171,19 @@ function forces_nounits!(fs_nounits, sys::System{D, false}, neighbors, fs_chunks
         fill!(fs_nounits, zero(eltype(fs_nounits)))
     end
 
+    if length(sys.three_body_inters)
+        if n_threads > 1
+            threebody_forces_threads!(...)
+        else
+            threebody_forces!(...)
+        end
+    end
+
     if length(sys.specific_inter_lists) > 0
         specific_forces!(fs_nounits, sys.atoms, sys.coords, sys.velocities, sys.boundary,
                          sys.force_units, sils_1_atoms, sils_2_atoms, sils_3_atoms, sils_4_atoms, step_n)
     end
+
 
     for inter in values(sys.general_inters)
         fs_gen = AtomsCalculators.forces(sys, inter; neighbors=neighbors, step_n=step_n,
@@ -291,6 +304,66 @@ function pairwise_forces_threads!(fs_nounits, fs_chunks, atoms, coords, velociti
 
     return fs_nounits
 end
+
+#* How to merge into the two-body stuff?
+function threebody_forces!(fs_nounits, atoms, coords, velocities, boundary, neighbors, force_units,
+                          n_atoms, threebody_inters_nonl, threebody_inters_nl, step_n=0)
+    fill!(fs_nounits, zero(eltype(fs_nounits)))
+
+    @inbounds if length(threebody_inters_nonl) > 0
+        for i in 1:n_atoms
+            for j in 1:n_atoms
+                if i != j
+                    dr_ij = vector(coords[i], coords[j], boundary)
+                    for k in j+1:n_atoms
+                        if i != k
+                            dr_ik = vector(coords[i], coords[j], boundary)
+
+                            f = force(threebody_inters_nonl[1], dr, atoms[i], atoms[j], force_units, false,
+                                    coords[i], coords[j], boundary, velocities[i], velocities[j], step_n)
+
+                            for inter in threebody_inters_nonl[2:end]
+                                f += force(inter, dr, atoms[i], atoms[j], force_units, false, coords[i],
+                                        coords[j], boundary, velocities[i], velocities[j], step_n)
+                            end
+
+                            check_force_units(f, force_units)
+                            f_ustrip = ustrip.(f)
+                            fs_nounits[i] -= f_ustrip
+                            fs_nounits[j] += f_ustrip
+                        end
+                    end
+
+                end
+            end
+        end
+    end
+
+    @inbounds if length(threebody_inters_nl) > 0
+        if isnothing(neighbors)
+            error("an interaction uses the neighbor list but neighbors is nothing")
+        end
+        for ni in eachindex(neighbors)
+
+            #* TODO HOW TO DO THIS FOR THREE BODY
+            i, j, special = neighbors[ni]
+            dr = vector(coords[i], coords[j], boundary)
+            f = force(threebody_inters_nl[1], dr, atoms[i], atoms[j], force_units, special,
+                      coords[i], coords[j], boundary, velocities[i], velocities[j], step_n)
+            for inter in threebody_inters_nl[2:end]
+                f += force(inter, dr, atoms[i], atoms[j], force_units, special, coords[i],
+                           coords[j], boundary, velocities[i], velocities[j], step_n)
+            end
+            check_force_units(f, force_units)
+            f_ustrip = ustrip.(f)
+            fs_nounits[i] -= f_ustrip
+            fs_nounits[j] += f_ustrip
+        end
+    end
+
+    return fs_nounits
+end
+
 
 function specific_forces!(fs_nounits, atoms, coords, velocities, boundary, force_units, sils_1_atoms, sils_2_atoms,
                           sils_3_atoms, sils_4_atoms, step_n=0)
