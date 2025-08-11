@@ -589,8 +589,13 @@ function System(;
         throw(ArgumentError("there are $(length(atoms)) atoms but $(length(atoms_data)) atom data entries"))
     end
 
-    all(isa.(values(pairwise_inters), PairwiseInteraction)) || error("Not all pairwise_inters are of type PairwiseInteraction: $(supertype.(typeof.(pairwise_inters)))")
-    all(isa.(values(specific_inter_lists), SpecificInteractionList)) || error("Not all specific_inter_lists are of type SpecificInteractionList : $(supertype.(typeof.(specific_inter_lists)))")
+    if !all(isa.(values(pairwise_inters), PairwiseInteraction))
+        throw(ArgumentError("Not all pairwise_inters have supertype PairwiseInteraction. Got: $(supertype.(typeof.(pairwise_inters)))"))
+    end
+
+    if !all(isa.(values(specific_inter_lists), SpecificInteractionList))
+        throw(ArgumentError("Not all specific_inter_lists have supertype SpecificInteractionList. Got: $(supertype.(typeof.(specific_inter_lists)))"))
+    end
 
     df = n_dof(D, length(atoms), boundary)
     if length(constraints) > 0
