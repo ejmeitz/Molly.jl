@@ -539,8 +539,8 @@ function System(;
                 velocities=nothing,
                 atoms_data=[],
                 topology=nothing,
-                pairwise_inters::NTuple{NPI, PairwiseInteraction}=(),
-                specific_inter_lists::NTuple{NSI, SpecificInteractionList}=(),
+                pairwise_inters=(),
+                specific_inter_lists=(),
                 general_inters=(),
                 constraints=(),
                 neighbor_finder=NoNeighborFinder(),
@@ -548,7 +548,7 @@ function System(;
                 force_units=u"kJ * mol^-1 * nm^-1",
                 energy_units=u"kJ * mol^-1",
                 k=default_k(energy_units),
-                data=nothing) where {NPI, NSI}
+                data=nothing)
     D = AtomsBase.n_dimensions(boundary)
     AT = array_type(coords)
     T = float_type(boundary)
@@ -588,6 +588,9 @@ function System(;
     if length(atoms_data) > 0 && length(atoms) != length(atoms_data)
         throw(ArgumentError("there are $(length(atoms)) atoms but $(length(atoms_data)) atom data entries"))
     end
+
+    all(isa.(values(pairwise_inters), PairwiseInteraction)) || error("Not all pairwise_inters are of type PairwiseInteraction: $(supertype.(typeof.(pairwise_inters)))")
+    all(isa.(values(specific_inter_lists), SpecificInteractionList)) || error("Not all specific_inter_lists are of type SpecificInteractionList : $(supertype.(typeof.(specific_inter_lists)))")
 
     df = n_dof(D, length(atoms), boundary)
     if length(constraints) > 0
