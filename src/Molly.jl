@@ -19,6 +19,7 @@ using GPUArrays
 using Graphs
 using KernelAbstractions
 import KernelAbstractions as KA
+import AcceleratedKernels as AK
 using NearestNeighbors
 using PeriodicTable
 using SimpleCrystals

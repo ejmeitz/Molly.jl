@@ -341,7 +341,7 @@ end
 @kernel inbounds=true function shake_step!( 
         @Const(clusters::StructArray{C}),
         @Const(active_idxs),    
-        still_active::AbstractVector{Bool},
+        still_active,
         @Const(N_active),
         @Const(shake_fn),
         other_kernel_args...;
@@ -358,10 +358,25 @@ end
             clusters[cluster_idx], #! allocates new struct (indexing StructArray)
             other_kernel_args...
         )
-        still_active[cluster_idx] = is_active
+        still_active[cluster_idx] = Int32(is_active)
     end
     
 end
+
+
+# @kernel inbounds=true function scatter_compact!(
+#     @Const(flags_i32::AbstractVector{Int32}),
+#     @Const(prefix_incl::AbstractVector{Int32}),
+#     @Const(in_idxs::AbstractVector{Int32}),
+#     out_idxs::AbstractVector{Int32}
+# )
+#     i = @index(Global, Linear)
+#     if i <= length(flags_i32)
+#         if flags_i32[i] != 0
+#             out_idxs[prefix_incl[i]] = in_idxs[i]
+#         end
+#     end
+# end
 
 function shake_gpu!(
         clusters::StructArray{C},
@@ -375,12 +390,14 @@ function shake_gpu!(
     N_active_clusters = length(clusters)
 
     kern = shake_step!(backend, gpu_block_size)
+    scatter_kernel = scatter_compact!(backend, gpu_block_size)
 
+    #! COULD BE PRE-ALLOCATED
     active_idxs = allocate(backend, Int32, N_active_clusters)
-    active_idxs .= 1:N_active_clusters
-    # Doesnt need to be initialized, kernel will do that
+    active_idxs .= Int32.(1:N_active_clusters)
+    # active_idxs_next = similar(active_idxs)
     still_active = allocate(backend, Bool, N_active_clusters)
-    KA.pagelock!(backend, still_active)
+    # prefix_sum_storage = similar(still_active)
 
     iter = 1
     while iter <= max_iters
@@ -395,10 +412,27 @@ function shake_gpu!(
             ndrange = N_active_clusters
         )
 
-        #* This compaction can be done ON GPU with 
-        #* the scan imeplmented in AcceleratedKernels.jl + a scatter operation
-        #* for now this is easier and (probably) faster for smaller systems
-        #* On CUDA/AMD we could also pin this memory...
+        # Scan (requires still_active to be Integers)
+        # AK.accumulate!(+, prefix_sum_storage, still_active, init = Int32(0))
+
+        # new_N = Array(@view(prefix_sum_storage[N_active_clusters:N_active_clusters]))[1]
+        # new_N == 0 && break
+        
+        # scatter_kernel(
+        #     @view(still_active[1:N_active_clusters]),
+        #     @view(prefix_sum_storage[1:N_active_clusters]),
+        #     @view(active_idxs[1:N_active_clusters]),
+        #     @view(active_idxs_next[1:new_N]); 
+        #     ndrange=N_active_clusters
+        # )
+
+        # N_active_clusters = new_N
+        # active_idxs, active_idxs_next = active_idxs_next, active_idxs
+
+        # #* This compaction can be done ON GPU with 
+        # #* the scan imeplmented in AcceleratedKernels.jl + a scatter operation
+        # #* for now this is easier and (probably) faster for smaller systems
+        # #* On CUDA/AMD we could also pin this memory...
         still_active_host = Array(still_active) #! MOVING FROM DEVICE TO HOST
         active_idxs_host  = findall(still_active_host) 
 
